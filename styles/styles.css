@@ -1347,4 +1347,7 @@ button, .pill, .check-circle, .stat-card {
 .readiness-pip { flex: 1; padding: 10px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); color: var(--text-muted); font-size: 15px; font-weight: 800; cursor: pointer; text-align: center; transition: all 0.15s; }
 .readiness-pip.sel { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.15); color: var(--accent); }
 .readiness-skip { background: none; border: none; color: var(--text-muted); font-size: 13px; cursor: pointer; padding: 10px 0 0; width: 100%; text-align: center; }
-}
+
+/* Chart range selector (Lift Progress card) */
+.chart-range-pill { background: var(--input-bg); border: 1px solid var(--border); color: var(--text-muted); padding: 5px 12px; border-radius: 8px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px; cursor: pointer; transition: all 0.15s; }
+.chart-range-pill.active { border-color: var(--accent); color: var(--accent); background: rgba(var(--accent-rgb), 0.1); }

@@ -11,7 +11,50 @@
         }
 
         // --- APP VERSION ---
-        const APP_VERSION = "v2026.06.12.0105";
+        const APP_VERSION = "v2026.07.05.1958";
+
+        // --- CANONICAL RTS TABLE ---
+        // Single source of truth (see CLAUDE.md "RTS table"). Every e1RM / load
+        // calculation references this constant — never inline a copy.
+        const RTS_TABLE = {
+            10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
+            9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
+            9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
+            8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
+            8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
+            7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
+            7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
+            6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
+            6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
+            5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
+            5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
+        };
+
+        // --- HTML ESCAPE (user-entered notes rendered via innerHTML) ---
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // --- GLOBAL ERROR SURFACE ---
+        // A single uncaught exception used to leave a silently broken screen.
+        // Show a small toast so failures are visible on the gym floor.
+        let _errToastLast = 0;
+        function showErrorToast(msg) {
+            const now = Date.now();
+            if (now - _errToastLast < 5000) return; // throttle spam
+            _errToastLast = now;
+            const existing = document.getElementById('app-error-toast');
+            if (existing) existing.remove();
+            const t = document.createElement('div');
+            t.id = 'app-error-toast';
+            t.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#7f1d1d;color:#fff;padding:10px 16px;border-radius:10px;font-size:12px;font-weight:700;z-index:9999;max-width:calc(100vw - 40px);box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+            t.textContent = '⚠️ ' + msg;
+            document.body.appendChild(t);
+            setTimeout(() => { if (t.parentNode) t.remove(); }, 6000);
+        }
+        window.addEventListener('error', (e) => showErrorToast(e.message || 'Unexpected error'));
+        window.addEventListener('unhandledrejection', (e) => showErrorToast((e.reason && e.reason.message) || 'Unexpected async error'));
 
         // --- THEMES ---
         const THEMES = [
@@ -109,19 +152,11 @@
         }
 
         async function bootWithPassword(password, silent) {
+            // Decrypt failures mean a wrong password; anything that breaks AFTER a
+            // successful decryption is a real boot error and must not masquerade as
+            // "incorrect password".
             try {
                 await decryptDatabase(password);
-                sessionStorage.setItem('gomu_key', password);
-                localStorage.setItem('gomu_auth_passed', 'true');
-                if (!silent) {
-                    const loginScreen = document.getElementById('login-screen');
-                    loginScreen.style.transition = 'opacity 0.4s ease';
-                    loginScreen.style.opacity = '0';
-                    setTimeout(() => { loginScreen.style.display = 'none'; }, 400);
-                } else {
-                    document.getElementById('login-screen').style.display = 'none';
-                }
-                await initApp();
             } catch (e) {
                 if (silent) {
                     // sessionStorage key is stale/wrong — show login
@@ -138,6 +173,23 @@
                     setTimeout(() => card.style.transform = 'translateX(10px)', 150);
                     setTimeout(() => card.style.transform = 'translateX(0)', 200);
                 }
+                return;
+            }
+            sessionStorage.setItem('gomu_key', password);
+            localStorage.setItem('gomu_auth_passed', 'true');
+            if (!silent) {
+                const loginScreen = document.getElementById('login-screen');
+                loginScreen.style.transition = 'opacity 0.4s ease';
+                loginScreen.style.opacity = '0';
+                setTimeout(() => { loginScreen.style.display = 'none'; }, 400);
+            } else {
+                document.getElementById('login-screen').style.display = 'none';
+            }
+            try {
+                await initApp();
+            } catch (e) {
+                console.error('Boot error after successful decryption:', e);
+                showErrorToast('Startup error: ' + (e && e.message ? e.message : e));
             }
         }
 
@@ -436,6 +488,7 @@
             updateLibraryUI();
             checkOnboarding();
             updateGDriveUI(); // Feature 1: refresh Drive connection status
+            populateExerciseDatalist(); // autocomplete source for Swap / Add modals
         }
 
         // AMRAP is a per-SET property, not per-block. A block flagged with `amrap: true`
@@ -671,7 +724,7 @@
             if (!isNaN(bw) && bw > 0) {
                 localStorage.setItem('userBodyweight', bw);
                 const bwHist = safeParse('bwHistory', []);
-                const today = new Date().toISOString().split('T')[0];
+                const today = localDateKey(new Date()); // local date, not UTC — late entries stay on today
                 const filtered = bwHist.filter(e => e.d !== today);
                 filtered.push({ d: today, w: bw, ts: Date.now() });
                 localStorage.setItem('bwHistory', JSON.stringify(filtered));
@@ -739,6 +792,98 @@
             setTimeout(() => toast.classList.remove('show'), 4000);
         };
 
+        // ── Unified backup collection / restore ──────────────────────────────
+        // ONE definition of what a backup contains, shared by local export,
+        // Gist backup, local import, and Gist restore — so the four can't drift.
+        async function collectBackup(includePictures) {
+            const backup = {
+                version: APP_VERSION,
+                timestamp: new Date().toISOString(),
+                activeProgram: localStorage.getItem('activeProgram'),
+                activeWorkout: safeParse('activeWorkout', null),
+                userBodyweight: localStorage.getItem('userBodyweight'),
+                userGender: localStorage.getItem('userGender'),
+                preferredUnit: localStorage.getItem('preferredUnit'),
+                gymBarbellWeight: localStorage.getItem('gymBarbellWeight'),
+                completedDays: safeParse('completedDays', {}),
+                global1RMs: safeParse('global1RMs', {}),
+                actualBests: safeParse('actualBests', {}),
+                prHistory: safeParse('prHistory', {}),
+                bwHistory: safeParse('bwHistory', []),
+                lastUsedWeights: safeParse('lastUsedWeights', {}),
+                equipmentModes: safeParse('equipmentModes', {}),
+                customPrograms: safeParse('customPrograms', {}),
+                warmupRoutine: safeParse('warmupRoutine', null),
+                gymPlateInventory: safeParse('gymPlateInventory', null),
+                programSwaps: {},
+                programModes: {},
+                workoutHistory: workoutHistoryCache,
+            };
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('programSwaps_')) backup.programSwaps[k] = safeParse(k, {});
+                if (k && k.startsWith('programModes_')) backup.programModes[k] = safeParse(k, {});
+            }
+            if (includePictures) backup.progressPictures = await getDB('progressPictures', []);
+            return backup;
+        }
+
+        // Merge two history arrays by log id — an incoming snapshot can never
+        // delete sessions it doesn't know about (fixes the 200-entry-Gist
+        // restore silently truncating long histories).
+        function mergeHistoryById(existing, incoming) {
+            const byId = new Map();
+            (existing || []).forEach(h => { if (h && h.id) byId.set(h.id, h); });
+            (incoming || []).forEach(h => { if (h && h.id) byId.set(h.id, h); });
+            return Array.from(byId.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        }
+
+        async function applyBackup(data) {
+            const setJSON = (key, val) => { if (val !== undefined && val !== null) localStorage.setItem(key, JSON.stringify(val)); };
+            const setStr = (key, val) => { if (val !== undefined && val !== null) localStorage.setItem(key, val); };
+            setJSON('completedDays', data.completedDays);
+            setJSON('global1RMs', data.global1RMs);
+            setJSON('actualBests', data.actualBests);
+            setJSON('prHistory', data.prHistory);
+            setJSON('bwHistory', data.bwHistory);
+            setJSON('lastUsedWeights', data.lastUsedWeights);
+            setJSON('equipmentModes', data.equipmentModes);
+            setJSON('customPrograms', data.customPrograms);
+            setJSON('warmupRoutine', data.warmupRoutine);
+            setJSON('gymPlateInventory', data.gymPlateInventory);
+            setJSON('activeWorkout', data.activeWorkout);
+            setStr('activeProgram', data.activeProgram);
+            setStr('userBodyweight', data.userBodyweight);
+            setStr('userGender', data.userGender);
+            setStr('preferredUnit', data.preferredUnit);
+            setStr('gymBarbellWeight', data.gymBarbellWeight);
+            if (data.programSwaps) Object.keys(data.programSwaps).forEach(k => setJSON(k, data.programSwaps[k]));
+            if (data.programModes) Object.keys(data.programModes).forEach(k => setJSON(k, data.programModes[k]));
+            if (data.workoutHistory && data.workoutHistory.length) {
+                const existing = await getDB('workoutHistory', []);
+                const merged = mergeHistoryById(existing, data.workoutHistory);
+                workoutHistoryCache = merged;
+                await setDB('workoutHistory', merged);
+            }
+            if (data.progressPictures && data.progressPictures.length) {
+                const existingPics = await getDB('progressPictures', []);
+                const byId = new Map();
+                existingPics.forEach(p => { if (p && p.id) byId.set(p.id, p); });
+                data.progressPictures.forEach(p => { if (p && p.id) byId.set(p.id, p); });
+                await setDB('progressPictures', Array.from(byId.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id)));
+            }
+        }
+
+        function fmtRelTime(ts) {
+            const mins = Math.floor((Date.now() - ts) / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + 'm ago';
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs + 'h ago';
+            const days = Math.floor(hrs / 24);
+            return days === 1 ? 'yesterday' : days + ' days ago';
+        }
+
         // ── GitHub Gist Cloud Backup ──────────────────────────────────────────
         window.updateGistUI = function() {
             const pat = localStorage.getItem('gistPAT') || '';
@@ -758,6 +903,19 @@
             if (idInput && gistId && !idInput.value) idInput.value = gistId;
             const ttsBtn = document.getElementById('tts-toggle-btn');
             if (ttsBtn) ttsBtn.innerText = localStorage.getItem('ttsEnabled') === 'false' ? 'Off' : 'On';
+
+            // Backup cadence indicator — silent-failing backups are the worst kind
+            const lastEl = document.getElementById('gist-last-backup');
+            if (lastEl) {
+                const lastTs = parseInt(localStorage.getItem('lastGistBackup') || '0');
+                const errTs = parseInt(localStorage.getItem('lastGistError') || '0');
+                let txt = '';
+                if (errTs > lastTs) txt = '⚠️ Last backup attempt failed — check your PAT / connection';
+                else if (lastTs) txt = 'Last backup: ' + fmtRelTime(lastTs);
+                lastEl.innerText = txt;
+                lastEl.style.display = txt ? 'block' : 'none';
+                lastEl.style.color = errTs > lastTs ? 'var(--danger)' : 'var(--text-muted)';
+            }
         };
 
         function updateGDriveUI() { window.updateGistUI(); }
@@ -771,32 +929,35 @@
         async function gdriveBackup() {
             const pat = localStorage.getItem('gistPAT') || '';
             if (!pat.trim()) return;
-            const content = JSON.stringify({
-                version: APP_VERSION,
-                timestamp: new Date().toISOString(),
-                actualBests: safeParse('actualBests', {}),
-                prHistory: safeParse('prHistory', {}),
-                global1RMs: safeParse('global1RMs', {}),
-                completedDays: safeParse('completedDays', {}),
-                bwHistory: safeParse('bwHistory', []),
-                lastUsedWeights: safeParse('lastUsedWeights', {}),
-                workoutHistory: workoutHistoryCache.slice(0, 200),
-            }, null, 2);
+            const backup = await collectBackup(false);
+            // Keep the Gist under GitHub's 1MB raw-fetch truncation limit;
+            // restore merges by id so a partial snapshot can't delete older sessions.
+            backup.workoutHistory = workoutHistoryCache.slice(0, 200);
+            const content = JSON.stringify(backup, null, 2);
             const gistId = localStorage.getItem('gistId') || '';
             const headers = { 'Authorization': `token ${pat}`, 'Content-Type': 'application/json' };
             const body = JSON.stringify({ description: 'Gomu Trainer backup', public: false, files: { 'gomu-trainer-backup.json': { content } } });
+            let ok = false;
             try {
                 if (gistId) {
-                    await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers, body });
+                    const resp = await fetch(`https://api.github.com/gists/${gistId}`, { method: 'PATCH', headers, body });
+                    ok = resp.ok;
                 } else {
                     const resp = await fetch('https://api.github.com/gists', { method: 'POST', headers, body });
                     if (resp.ok) {
                         const data = await resp.json();
                         localStorage.setItem('gistId', data.id);
-                        window.updateGistUI();
+                        ok = true;
                     }
                 }
             } catch(_) {}
+            if (ok) {
+                localStorage.setItem('lastGistBackup', String(Date.now()));
+                localStorage.removeItem('lastGistError');
+            } else {
+                localStorage.setItem('lastGistError', String(Date.now()));
+            }
+            window.updateGistUI();
         }
 
         window.gdriveBackupNow = async function() {
@@ -822,16 +983,8 @@
                 const content = data.files['gomu-trainer-backup.json']?.content;
                 if (!content) { alert('No backup file found in this gist.'); return; }
                 const backup = JSON.parse(content);
-                if (backup.actualBests) localStorage.setItem('actualBests', JSON.stringify(backup.actualBests));
-                if (backup.prHistory) localStorage.setItem('prHistory', JSON.stringify(backup.prHistory));
-                if (backup.global1RMs) localStorage.setItem('global1RMs', JSON.stringify(backup.global1RMs));
-                if (backup.completedDays) localStorage.setItem('completedDays', JSON.stringify(backup.completedDays));
-                if (backup.bwHistory) localStorage.setItem('bwHistory', JSON.stringify(backup.bwHistory));
-                if (backup.lastUsedWeights) localStorage.setItem('lastUsedWeights', JSON.stringify(backup.lastUsedWeights));
+                await applyBackup(backup); // full restore; history merged by id, never truncated
                 localStorage.setItem('gistId', gistId);
-                if (backup.workoutHistory && backup.workoutHistory.length) {
-                    await setDB('workoutHistory', backup.workoutHistory);
-                }
                 alert('Restored successfully! Reloading…');
                 window.location.reload();
             } catch(e) {
@@ -1018,8 +1171,40 @@
                 updateLibraryUI();
             }
 
+            renderDeloadHint();
             updateAnalytics();
         }
+
+        // Deload nudge: the drift indicator already computes per-lift fatigue —
+        // when 2+ main lifts trend down together, surface it instead of leaving it passive.
+        function renderDeloadHint() {
+            const el = document.getElementById('deload-hint');
+            if (!el) return;
+            const dismissed = parseInt(localStorage.getItem('deloadHintDismissed') || '0');
+            if (Date.now() - dismissed < 7 * 86400000) { el.style.display = 'none'; return; }
+            const mains = ['Squat', 'Bench Press', 'Deadlift'];
+            const fatiguing = mains.filter(n => { const d = getRpeDrift(n); return d && d.dir === 'down'; });
+            if (fatiguing.length >= 2) {
+                el.innerHTML = `
+                <div style="display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--danger);border-radius:12px;padding:14px 16px;margin-bottom:15px;">
+                    <span style="font-size:20px;flex-shrink:0;">🪫</span>
+                    <div style="flex:1;min-width:0;">
+                        <div style="font-size:13px;font-weight:800;color:var(--text-main);">Fatigue building</div>
+                        <div style="font-size:12px;color:var(--text-muted);line-height:1.4;">${fatiguing.join(' and ')} e1RM${fatiguing.length > 1 ? 's are' : ' is'} trending down across recent sessions. Consider a lighter day or extra rest.</div>
+                    </div>
+                    <button onclick="dismissDeloadHint()" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;padding:4px;flex-shrink:0;">×</button>
+                </div>`;
+                el.style.display = 'block';
+            } else {
+                el.style.display = 'none';
+            }
+        }
+
+        window.dismissDeloadHint = function() {
+            localStorage.setItem('deloadHintDismissed', String(Date.now()));
+            const el = document.getElementById('deload-hint');
+            if (el) el.style.display = 'none';
+        };
 
         function checkOnboarding() {
             let saved1RMs = safeParse('global1RMs', {});
@@ -1197,8 +1382,12 @@
         }
 
         function startProgram(programId) {
+            if (!db[programId] || !db[programId].weeks) {
+                alert("⚠️ This program hasn't been injected with data yet! Run your Python script first.");
+                return;
+            }
             const programWeeks = Object.keys(db[programId].weeks).sort((a,b) => a - b);
-            
+
             if (programWeeks.length === 0) {
                 alert("⚠️ This program hasn't been injected with data yet! Run your Python script first.");
                 return;
@@ -1536,7 +1725,8 @@
                 const backupState = {
                     actualBests: safeParse('actualBests', {}),
                     global1RMs: safeParse('global1RMs', {}),
-                    lastUsedWeights: safeParse('lastUsedWeights', {})
+                    lastUsedWeights: safeParse('lastUsedWeights', {}),
+                    prHistory: safeParse('prHistory', {}) // so canceled-workout PRs don't leave phantom timeline entries
                 };
                 
                 activeWorkout = { key, program: currentProgram, week: selectedWeek, day: selectedDay, startTime: Date.now(), backupState: backupState };
@@ -1583,7 +1773,8 @@
                 const backupState = {
                     actualBests: safeParse('actualBests', {}),
                     global1RMs: safeParse('global1RMs', {}),
-                    lastUsedWeights: safeParse('lastUsedWeights', {})
+                    lastUsedWeights: safeParse('lastUsedWeights', {}),
+                    prHistory: safeParse('prHistory', {}) // so canceled-workout PRs don't leave phantom timeline entries
                 };
                 
                 activeWorkout = { key, program: currentProgram, week: selectedWeek, day: selectedDay, startTime: Date.now(), backupState: backupState };
@@ -1602,7 +1793,7 @@
             let totalVolume = 0;
             let completedSets = 0;
             let maxLoad = 0;
-            let exCount = exercises.length;
+            let exCount = exercises.filter(ex => !ex.isDeleted).length;
             
             let workoutDetails = [];
 
@@ -1632,10 +1823,13 @@
                                 if (bw > 0) effectiveLoad += bw;
                             }
                             
-                            totalVolume += (effectiveLoad * actualReps); 
+                            totalVolume += (effectiveLoad * actualReps);
                             if (effectiveLoad > maxLoad) maxLoad = effectiveLoad;
-                            
-                            exerciseLog.sets.push({ reps: actualReps, load: load, rpe: rpe });
+
+                            const setEntry = { reps: actualReps, load: load, rpe: rpe };
+                            const setNote = savedSession[`${rowId}_note`];
+                            if (setNote) setEntry.note = setNote;
+                            exerciseLog.sets.push(setEntry);
                         }
                         
                         // Process extras tied directly to Set 's'
@@ -1740,10 +1934,17 @@
             drawChart();
         };
 
+        window.setChartRange = function(r) {
+            window.chartRange = r;
+            document.querySelectorAll('.chart-range-pill').forEach(b =>
+                b.classList.toggle('active', b.dataset.range === String(r)));
+            drawChart();
+        };
+
         function initChartSelect() {
             let history = safeParse('workoutHistory', []);
             let exSet = new Set();
-            history.forEach(log => log.details.forEach(e => exSet.add(normalizeExName(e.name))));
+            history.forEach(log => (log.details || []).forEach(e => exSet.add(normalizeExName(e.name))));
             let listHtml = document.getElementById('chart-exercise-list');
             let selectDisplay = document.getElementById('chart-exercise-btn');
             if(!listHtml || !selectDisplay) return;
@@ -1790,19 +1991,7 @@
             const getE1RM = (weight, reps, rpe) => {
                 if (!weight || weight <= 0 || !reps || reps <= 0) return 0;
                 
-                const rtsChart = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                const rtsChart = RTS_TABLE;
 
                 // Parse RPE, default to 10 (max effort) if the user didn't enter one
                 let parsedRpe = parseFloat(rpe);
@@ -1826,7 +2015,7 @@
             history.forEach(log => {
                 // Canonical-name match: merges data logged under aliases (and multiple
                 // same-lift entries within one session, e.g. a "(Backoffs)" slot)
-                const matches = log.details.filter(e => normalizeExName(e.name) === exName);
+                const matches = (log.details || []).filter(e => normalizeExName(e.name) === exName);
                 const allSets = matches.flatMap(m => m.sets || []);
                 if(allSets.length > 0) {
                     let maxE1RM = Math.max(...allSets.map(s => getE1RM(s.load, s.reps, s.rpe)));
@@ -1839,7 +2028,16 @@
                     }
                 }
             });
-            let data = Object.values(dayMap).sort((a, b) => a.ts - b.ts).slice(-7);
+            // Range selector: 'recent' = last 7 sessions (original behavior),
+            // a number = trailing days, 'all' = everything logged.
+            const chartRange = window.chartRange || 'recent';
+            let data = Object.values(dayMap).sort((a, b) => a.ts - b.ts);
+            if (chartRange === 'recent') {
+                data = data.slice(-7);
+            } else if (chartRange !== 'all') {
+                const cutoff = Date.now() - parseInt(chartRange) * 86400000;
+                data = data.filter(d => d.ts >= cutoff);
+            }
 
             if(data.length < 2) {
                 container.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:30px 0;color:var(--text-muted);">
@@ -1883,12 +2081,20 @@
                 return d.toLocaleDateString('default', { month: 'short', day: 'numeric' });
             };
 
+            // With many points (long ranges) thin the labels so they don't overlap:
+            // value labels only on the all-time-max and latest point, ~5 date labels.
+            const many = data.length > 9;
+            const maxIdx = data.reduce((mi, d, i, arr) => d.value > arr[mi].value ? i : mi, 0);
+            const dateStep = Math.max(1, Math.ceil(data.length / 5));
             let circles = data.map((d, i) => {
                 let x = (i / (data.length - 1)) * (w - 40) + 20;
                 let y = h - padding - ((d.value - minV) / range) * (h - 2 * padding);
-                return `<circle cx="${x}" cy="${y}" r="5" fill="var(--bg)" stroke="var(--accent)" stroke-width="2"/>
-                        <text x="${x}" y="${y - 12}" fill="var(--text-main)" font-size="11" font-weight="800" text-anchor="middle" font-family="Inter">${d.value}kg</text>
-                        <text x="${x}" y="${h + 14}" fill="var(--text-muted)" font-size="9" text-anchor="middle" font-family="Inter">${fmtDate(d.ts)}</text>`;
+                const showVal = !many || i === maxIdx || i === data.length - 1;
+                const showDate = !many || i % dateStep === 0 || i === data.length - 1;
+                let svg = `<circle cx="${x}" cy="${y}" r="${many ? 3 : 5}" fill="var(--bg)" stroke="var(--accent)" stroke-width="2"/>`;
+                if (showVal) svg += `<text x="${x}" y="${y - 12}" fill="var(--text-main)" font-size="11" font-weight="800" text-anchor="middle" font-family="Inter">${d.value}kg</text>`;
+                if (showDate) svg += `<text x="${x}" y="${h + 14}" fill="var(--text-muted)" font-size="9" text-anchor="middle" font-family="Inter">${fmtDate(d.ts)}</text>`;
+                return svg;
             }).join('');
             
             // Build gradient fill polygon (line points + bottom corners)
@@ -2254,6 +2460,7 @@
                                 <span>${kgDisp(set.load)} ${unitSuffix()} × ${set.reps}</span>
                                 <span>${rpeText}</span>
                             </div>`;
+                            if (set.note) detailsHtml += `<div style="font-size:11px;color:var(--text-muted);font-style:italic;padding:0 0 6px 12px;">↳ ${escapeHtml(set.note)}</div>`;
                         });
                     });
                     detailsHtml += `</div>`;
@@ -2275,7 +2482,7 @@
                             <span class="history-date">${log.date}${dur ? `<span class="duration-badge">${dur}</span>` : ''}</span>
                             <h3 class="history-title">${log.programName} (W${log.week} D${log.day})</h3>
                             <div class="history-stats">${log.sets} Sets • ${volDisplay} Volume</div>
-                            ${log.note ? `<div class="history-note">"${log.note}"</div>` : ''}
+                            ${log.note ? `<div class="history-note">"${escapeHtml(log.note)}"</div>` : ''}
                             <div class="history-expand-indicator">▼ Expand</div>
                         </summary>
                         ${detailsHtml}
@@ -2516,6 +2723,7 @@
                     localStorage.setItem('actualBests', JSON.stringify(activeWorkout.backupState.actualBests));
                     localStorage.setItem('global1RMs', JSON.stringify(activeWorkout.backupState.global1RMs));
                     localStorage.setItem('lastUsedWeights', JSON.stringify(activeWorkout.backupState.lastUsedWeights));
+                    if (activeWorkout.backupState.prHistory) localStorage.setItem('prHistory', JSON.stringify(activeWorkout.backupState.prHistory));
                 }
 
                 localStorage.removeItem(key);
@@ -2626,7 +2834,7 @@
             if (num > 0) {
                 global1RMs[exName] = num;
             } else {
-                global1RMs[exName] = 0; 
+                delete global1RMs[exName]; // clearing the field removes the row instead of leaving a dead 0
             }
             localStorage.setItem('global1RMs', JSON.stringify(global1RMs));
         };
@@ -3169,19 +3377,7 @@
             const needsTimelineSync = !localStorage.getItem('prTimelineStaleSync_v1');
             if (!needsRebuild && !needsBestsSync && !needsTimelineSync) return;
 
-            const rts = {
-                10:[1.000,0.960,0.920,0.890,0.860,0.840,0.810,0.790,0.760,0.740,0.710,0.690],
-                9.5:[0.980,0.940,0.910,0.880,0.850,0.820,0.800,0.770,0.750,0.720,0.690,0.670],
-                9:[0.960,0.920,0.890,0.860,0.840,0.810,0.790,0.760,0.740,0.710,0.680,0.650],
-                8.5:[0.940,0.910,0.880,0.850,0.820,0.800,0.770,0.750,0.720,0.690,0.670,0.640],
-                8:[0.920,0.890,0.860,0.840,0.810,0.790,0.760,0.740,0.710,0.680,0.650,0.630],
-                7.5:[0.910,0.880,0.850,0.820,0.800,0.770,0.750,0.720,0.690,0.670,0.640,0.610],
-                7:[0.890,0.860,0.840,0.810,0.790,0.760,0.740,0.710,0.680,0.650,0.630,0.600],
-                6.5:[0.880,0.850,0.820,0.800,0.770,0.750,0.720,0.690,0.670,0.640,0.610,0.580],
-                6:[0.860,0.840,0.810,0.790,0.760,0.740,0.710,0.680,0.650,0.630,0.600,0.570],
-                5.5:[0.850,0.820,0.800,0.770,0.750,0.720,0.690,0.670,0.640,0.610,0.580,0.550],
-                5:[0.840,0.810,0.790,0.760,0.740,0.710,0.680,0.650,0.630,0.600,0.570,0.540]
-            };
+            const rts = RTS_TABLE;
             const calcE1RM = (w, r, rpe) => {
                 if (!w || w <= 0 || !r || r <= 0) return 0;
                 let p = isNaN(rpe) || rpe < 0 || rpe > 10 ? 10 : rpe;
@@ -3625,16 +3821,8 @@
         }
 
         async function exportData() {
-            const backup = {
-                activeWorkout: safeParse('activeWorkout', null),
-                completedDays: safeParse('completedDays', {}),
-                global1RMs: safeParse('global1RMs', {}),
-                actualBests: safeParse('actualBests', {}),
-                lastUsedWeights: safeParse('lastUsedWeights', {}),
-                workoutHistory: workoutHistoryCache, // Pulls from the new infinite DB
-                activeProgram: localStorage.getItem('activeProgram')
-            };
-            
+            // Full backup: everything collectBackup knows about, including progress pictures
+            const backup = await collectBackup(true);
             const jsonString = JSON.stringify(backup, null, 2);
             const fileName = `gomu_trainer_backup_${new Date().toISOString().split('T')[0]}.json`;
 
@@ -3679,18 +3867,7 @@
             reader.onload = async function(e) {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if (data.activeWorkout) localStorage.setItem('activeWorkout', JSON.stringify(data.activeWorkout));
-                    if (data.completedDays) localStorage.setItem('completedDays', JSON.stringify(data.completedDays));
-                    if (data.global1RMs) localStorage.setItem('global1RMs', JSON.stringify(data.global1RMs));
-                    if (data.actualBests) localStorage.setItem('actualBests', JSON.stringify(data.actualBests));
-                    if (data.lastUsedWeights) localStorage.setItem('lastUsedWeights', JSON.stringify(data.lastUsedWeights));
-                    if (data.activeProgram) localStorage.setItem('activeProgram', data.activeProgram);
-                    
-                    if (data.workoutHistory) {
-                        workoutHistoryCache = data.workoutHistory;
-                        await setDB('workoutHistory', workoutHistoryCache);
-                    }
-                    
+                    await applyBackup(data); // restores every field present; history merged by id
                     alert("Backup imported successfully! The app will now refresh.");
                     location.reload();
                 } catch(err) {
@@ -3859,19 +4036,7 @@
         // Compares best e1RM across recent sessions to detect adaptation or fatigue
         function getRpeDrift(exName) {
             const history = safeParse('workoutHistory', []);
-            const rts = {
-                10:  [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                9.5: [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                9:   [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                8.5: [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                8:   [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                7.5: [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                7:   [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                6.5: [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                6:   [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                5.5: [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                5:   [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-            };
+            const rts = RTS_TABLE;
             const calcE1RM = (load, reps, rpe) => {
                 if (!load || load <= 0 || !reps || reps <= 0) return 0;
                 let r = parseFloat(rpe); if (isNaN(r) || r < 0 || r > 10) r = 10;
@@ -3879,13 +4044,16 @@
                 return load / rts[rounded][Math.max(0, Math.min(11, reps - 1))];
             };
 
-            // Collect best e1RM per session, most-recent first (up to 6 sessions)
+            // Collect best e1RM per session, most-recent first (up to 6 sessions).
+            // Canonical-name match so data logged under aliases in other programs counts.
+            const driftTarget = normalizeExName(exName);
             let sessions = [];
             for (const log of history) {
                 if (!log.details) continue;
-                const ex = log.details.find(e => e.name === exName);
-                if (!ex || !ex.sets || ex.sets.length === 0) continue;
-                const best = Math.max(...ex.sets.map(s => calcE1RM(s.load, s.reps, s.rpe)));
+                const matches = log.details.filter(e => normalizeExName(e.name) === driftTarget);
+                const allSets = matches.flatMap(m => m.sets || []);
+                if (allSets.length === 0) continue;
+                const best = Math.max(...allSets.map(s => calcE1RM(s.load, s.reps, s.rpe)));
                 if (best > 0) sessions.push(best);
                 if (sessions.length >= 6) break;
             }
@@ -4221,19 +4389,7 @@
                         let smartDefaultLoad = '';
                         if (block.targetRpe && resolved1RM > 0 && !isAmrap) {
                             // SMART RPE PRE-LOAD: Calculates exact starting weight based on Target RPE
-                            const rtsChart = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                            const rtsChart = RTS_TABLE;
                             let rRoundedRpe = Math.round(block.targetRpe * 2) / 2;
                             let rRepIndex = Math.max(0, Math.min(11, block.reps - 1));
                             
@@ -4339,9 +4495,11 @@
                                 <span class="check-circle ${isChecked}" id="${checkId}" data-rest="0" data-norest="true" data-timerrow="true" onclick="toggleCheck(this)"></span>
                             </div>`;
                         } else {
+                            const setNote = savedSession[`${rowId}_note`];
+                            const noteTapAttr = !isCompleted ? `onclick="openSetNote('${rowId}')" style="cursor:pointer;" title="Tap to add a set note"` : '';
                             setHtml = `
                             <div class="set-row">
-                                <span>${s}</span>
+                                <span ${noteTapAttr}>${s}${setNote ? '<span style="color:var(--teal);font-size:9px;vertical-align:top;"> ●</span>' : ''}</span>
                                 <span><input type="number" id="${repsInputId}" class="${repsClass}" data-rowid="${rowId}" value="${repsValue}" placeholder="${isAmrap ? 'AMRAP' : ''}" inputmode="numeric" ${disabledAttr}></span>
                                 <span><input type="number" id="${rpeInputId}" class="${rpeClass}" data-rowid="${rowId}" data-targetrpe="${isAmrap ? '10' : (block.targetRpe || '')}" value="${rpeValue}" step="0.5" inputmode="decimal" oninput="if(window.colorizeRpe) window.colorizeRpe(this)" ${disabledAttr}></span>
                                 <span style="position:relative; display:flex; align-items:center; justify-content:center; width: 100%;">
@@ -4353,7 +4511,7 @@
                                 </span>
                                 ${e1rmCell}
                                 <span class="check-circle ${isChecked}" id="${checkId}" data-rest="${restSeconds}" data-blocktype="${block.type}" ${isSupersetNext ? 'data-superset="true"' : ''} ${isActivation ? 'data-myotype="activation"' : ''} ${isMyoBackoff ? 'data-myotype="backoff"' : ''} ${isDropSet ? `data-myotype="drop" data-dropfactor="${block.dropFactor || ''}"` : ''} onclick="toggleCheck(this)"></span>
-                            </div>`;
+                            </div>${setNote ? `<div style="font-size:11px;color:var(--text-muted);font-style:italic;padding:0 16px 6px;text-align:left;">↳ ${escapeHtml(setNote)}</div>` : ''}`;
                         }
 
                         // Wrap it in the Swipe-to-delete wrapper if the workout is active
@@ -4445,7 +4603,7 @@
             if (!isCompleted) {
                 html += `
                 <div style="display: flex; gap: 12px; margin-top: 20px; margin-bottom: 20px;">
-                    <button class="action-btn" style="flex: 1; background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px dashed var(--border); margin: 0; padding: 15px; font-size: 14px;" onclick="document.getElementById('add-exercise-modal').style.display='flex'">+ Add</button>
+                    <button class="action-btn" style="flex: 1; background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px dashed var(--border); margin: 0; padding: 15px; font-size: 14px;" onclick="openAddExerciseModal()">+ Add</button>
                     <button class="action-btn" style="flex: 1; background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px dashed var(--border); margin: 0; padding: 15px; font-size: 14px;" onclick="openReorderModal()">⇅ Reorder</button>
                 </div>`;
             }
@@ -4697,8 +4855,49 @@
         window.openSwapModal = function(exIndex, originalName) {
             window.swapTargetExIndex = exIndex;
             window.swapOriginalName = originalName;
+            populateExerciseDatalist();
             document.getElementById('swap-ex-name').value = '';
             document.getElementById('swap-exercise-modal').style.display = 'flex';
+        };
+
+        window.openAddExerciseModal = function() {
+            populateExerciseDatalist();
+            document.getElementById('add-exercise-modal').style.display = 'flex';
+        };
+
+        // Autocomplete source for the Swap / Add name inputs: canonical alias targets,
+        // every name already logged in history, and every name in the loaded programs.
+        // Free-text entry is how alias fragmentation happens — suggest known names first.
+        function populateExerciseDatalist() {
+            const dl = document.getElementById('exercise-name-list');
+            if (!dl) return;
+            const names = new Set();
+            Object.values(EXERCISE_ALIASES).forEach(n => names.add(n));
+            (workoutHistoryCache || []).forEach(log => (log.details || []).forEach(e => { if (e && e.name) names.add(normalizeExName(e.name)); }));
+            if (typeof db !== 'undefined') {
+                Object.keys(db).forEach(pid => {
+                    const weeks = (db[pid] && db[pid].weeks) || {};
+                    Object.keys(weeks).forEach(w => Object.keys(weeks[w] || {}).forEach(d =>
+                        (weeks[w][d] || []).forEach(ex => { if (ex && ex.name) names.add(ex.name); })
+                    ));
+                });
+            }
+            dl.innerHTML = Array.from(names).sort().map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
+        }
+
+        // Per-set note: tap the set number to attach a short note (equipment, cues, pain flags).
+        // Stored in the session blob as `${rowId}_note`, carried into the history log by generateSummary.
+        window.openSetNote = function(rowId) {
+            const workoutKey = getWorkoutKey();
+            const saved = safeParse(workoutKey, {});
+            const current = saved[`${rowId}_note`] || '';
+            const v = prompt('Set note (belt, cues, tweaks…):', current);
+            if (v === null) return;
+            const session = safeParse(workoutKey, {});
+            if (v.trim()) session[`${rowId}_note`] = v.trim();
+            else delete session[`${rowId}_note`];
+            localStorage.setItem(workoutKey, JSON.stringify(session));
+            renderWorkout();
         };
 
         window.submitSwapExercise = function() {
@@ -5065,15 +5264,18 @@
             
             let history = safeParse('workoutHistory', []);
             let foundSessions = [];
-            
-            // Scan history for the last 3 times this exercise was performed
+
+            // Scan history for the last 3 times this exercise was performed.
+            // Canonical-name match so sessions logged under aliases show up too.
+            const overlayTarget = normalizeExName(exName);
             for (let log of history) {
-                let exMatch = log.details.find(e => e.name === exName);
-                if (exMatch && exMatch.sets.length > 0) {
+                const matches = (log.details || []).filter(e => normalizeExName(e.name) === overlayTarget);
+                const allSets = matches.flatMap(m => m.sets || []);
+                if (allSets.length > 0) {
                     foundSessions.push({
                         date: log.date,
-                        weight: Math.max(...exMatch.sets.map(s => s.load)),
-                        sets: exMatch.sets
+                        weight: Math.max(...allSets.map(s => s.load)),
+                        sets: allSets
                     });
                 }
                 if (foundSessions.length >= 3) break;
@@ -5107,12 +5309,6 @@
             overlay.style.display = 'flex';
             // Slight delay allows the CSS transition to fire smoothly
             setTimeout(() => overlay.classList.add('open'), 10);
-        };
-
-        window.closeHistoryOverlay = function() {
-            const overlay = document.getElementById('history-overlay');
-            overlay.classList.remove('open');
-            setTimeout(() => overlay.style.display = 'none', 300);
         };
 
         window.closeHistoryOverlay = function() {
@@ -5610,7 +5806,7 @@
                     navigator.serviceWorker.ready.then(function(reg) {
                         reg.showNotification("⏱️ Rest Complete!", {
                             body: "Time for your next set. Tap to resume.",
-                            icon: "./logo.png",
+                            icon: "./assets/logo-192.png",
                             vibrate: [200, 100, 200, 100, 400],
                             tag: "gomu-timer",
                             renotify: true,
@@ -5758,19 +5954,7 @@
                         // Calculate Estimated 1RM for true strength comparison
                         const getSetE1RM = (w, r, rpe) => {
                             if (!w || w <= 0 || !r || r <= 0) return 0;
-                            const rts = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                            const rts = RTS_TABLE;
                             let parsed = isNaN(rpe) || rpe < 0 || rpe > 10 ? 10 : rpe;
                             let rounded = Math.round(parsed * 2) / 2;
                             let rIdx = Math.max(0, Math.min(11, r - 1));
@@ -5792,7 +5976,7 @@
                         
                         // Buffer to avoid microscopic floating point math errors
                         const isNewE1rmBetter = (newE1RM - oldE1RM) > 0.01;
-                        const isSameE1rmButHeavier = Math.abs(newE1RM - oldE1RM) <= 0.01 && val > oldRecord.weight;
+                        const isSameE1rmButHeavier = !!oldRecord && Math.abs(newE1RM - oldE1RM) <= 0.01 && val > oldRecord.weight;
 
                         if (!oldRecord || isNewE1rmBetter || isSameE1rmButHeavier) {
 
@@ -5961,17 +6145,21 @@
             const setIdentifier = match[3]; // e.g., 's1', 's2'
             const extraIdxStr = match[4]; // e.g., undefined, '0', '1'
 
-            const ex = db[currentProgram].weeks[selectedWeek][selectedDay][exIndex];
+            const workoutKey = getWorkoutKey();
+            let savedSession = safeParse(workoutKey, {});
+
+            // Resolve through the EFFECTIVE exercise list (swaps, added exercises,
+            // Myo/Drop conversions) — indexing the raw db crashes on added exercises
+            // and reads the wrong block after a mode conversion.
+            const ex = getActiveExercises(currentProgram, selectedWeek, selectedDay, workoutKey)[exIndex];
+            if (!ex || !ex.blocks) return;
             const block = ex.blocks[bIndex];
 
             // If the block has no target RPE, we don't calculate anything
-            if (!block.targetRpe) return;
-            
+            if (!block || !block.targetRpe) return;
+
             // Determine the index of the extra set we are currently evaluating
             let currentExtraIndex = extraIdxStr !== undefined ? parseInt(extraIdxStr) : -1;
-
-            const workoutKey = getWorkoutKey();
-            let savedSession = safeParse(workoutKey, {});
             
             // NEW: The memory key is now permanently tied to the specific base set
             const extrasKey = `extras_${exIndex}_${bIndex}_${setIdentifier}`;
@@ -5980,19 +6168,7 @@
             // Did we undershoot?
             if (inputRpe < block.targetRpe) {
                 // Updated Coach's Custom RPE Chart (RPE 5 to 10)
-                const rtsChart = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                const rtsChart = RTS_TABLE;
 
                 // Unlocked to allow RPE down to 0
                 let rInputRpe = Math.max(0, Math.min(10, Math.round(inputRpe * 2) / 2));
@@ -6111,19 +6287,7 @@
 
                 if (effectiveWeight > 0 && rpe >= 0 && rpe <= 10 && reps > 0) {
                     
-                    const rtsChart = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                    const rtsChart = RTS_TABLE;
 
                     let roundedRpe = Math.round(rpe * 2) / 2;
                     let repIndex = Math.max(0, Math.min(11, reps - 1));
@@ -6212,19 +6376,7 @@
                                 const trRpe = parseFloat(targetRpeInput.value);
                                 
                                 if (trReps > 0 && trRpe >= 0 && trRpe <= 10) {
-                                    const rtsChart = {
-                                10:   [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690],
-                                9.5:  [0.980, 0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670],
-                                9:    [0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650],
-                                8.5:  [0.940, 0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640],
-                                8:    [0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630],
-                                7.5:  [0.910, 0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610],
-                                7:    [0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600],
-                                6.5:  [0.880, 0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580],
-                                6:    [0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570],
-                                5.5:  [0.850, 0.820, 0.800, 0.770, 0.750, 0.720, 0.690, 0.670, 0.640, 0.610, 0.580, 0.550],
-                                5:    [0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.680, 0.650, 0.630, 0.600, 0.570, 0.540]
-                            };
+                                    const rtsChart = RTS_TABLE;
                                     let rRoundedRpe = Math.round(trRpe * 2) / 2;
                                     let rRepIndex = Math.max(0, Math.min(11, trReps - 1));
                                     
@@ -6341,6 +6493,7 @@
                     localStorage.setItem('actualBests', JSON.stringify(activeWorkout.backupState.actualBests));
                     localStorage.setItem('global1RMs', JSON.stringify(activeWorkout.backupState.global1RMs));
                     localStorage.setItem('lastUsedWeights', JSON.stringify(activeWorkout.backupState.lastUsedWeights));
+                    if (activeWorkout.backupState.prHistory) localStorage.setItem('prHistory', JSON.stringify(activeWorkout.backupState.prHistory));
                 }
 
                 const key = getWorkoutKey();

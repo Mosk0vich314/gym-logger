@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gomu-trainer-v2026.06.12.0105'; // Increment this!
+const CACHE_NAME = 'gomu-trainer-v2026.07.05.1958'; // Increment this!
 const urlsToCache = [
   './',
   './index.html',
@@ -43,28 +43,44 @@ self.addEventListener('activate', function(event) {
     );
 });
 
-// 3. FETCH: The "Self-Updating" Engine
+// 3. FETCH: Stale-While-Revalidate
+// Serve from cache INSTANTLY, refresh the cache in the background.
+// Network-first made the app hang for the full network timeout on flaky
+// gym connections (1 bar ≠ offline). Updates still land: each deploy ships
+// a new CACHE_NAME + version-stamped sw.js, and the controllerchange
+// listener in app.js reloads the page when the new worker takes over.
 self.addEventListener('fetch', function(event) {
     // We only want to handle standard GET requests (ignore API posts, etc.)
     if (event.request.method !== 'GET') return;
+    // Never intercept API calls (e.g. GitHub Gist backup)
+    if (event.request.url.includes('api.github.com')) return;
 
     event.respondWith(
-        fetch(event.request)
-            .then(function(response) {
-                // THE MAGIC TRICK: Auto-Update the Cache!
-                // If we successfully get a fresh file from GitHub, we show it to you
-                // AND silently save a copy into the phone's memory for next time.
-                if (response && response.status === 200) {
-                    const responseClone = response.clone();
-                    caches.open(CACHE_NAME).then(function(cache) {
-                        cache.put(event.request, responseClone);
-                    });
-                }
-                return response;
+        caches.match(event.request)
+            .then(function(cached) {
+                // ignoreSearch fallback: install caches './scripts/database.enc' but the
+                // app requests it with '?v=...' — without this, offline login breaks
+                // until the versioned URL has been fetched online once.
+                if (cached) return cached;
+                return caches.match(event.request, { ignoreSearch: true });
             })
-            .catch(function() {
-                // You have no internet (e.g., in the gym). Serve the saved files from the vault!
-                return caches.match(event.request);
+            .then(function(cached) {
+                const network = fetch(event.request)
+                    .then(function(response) {
+                        // Cache good responses. Opaque (status 0) covers cross-origin
+                        // no-cors resources like Google Fonts so they work offline too.
+                        if (response && (response.status === 200 || response.type === 'opaque')) {
+                            const responseClone = response.clone();
+                            caches.open(CACHE_NAME).then(function(cache) {
+                                cache.put(event.request, responseClone);
+                            });
+                        }
+                        return response;
+                    })
+                    .catch(function() {
+                        return cached; // offline and nothing fresher — serve what we have
+                    });
+                return cached || network;
             })
     );
 });

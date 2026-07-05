@@ -11,7 +11,7 @@
     <link rel="icon" type="image/png" href="./assets/logo.png">
     <link rel="apple-touch-icon" href="./assets/logo.png">
 
-    <link rel="stylesheet" href="./styles/styles.css?v=2026.06.12.0105">
+    <link rel="stylesheet" href="./styles/styles.css?v=2026.07.05.1958">
 </head>
 <body>
     <div id="login-screen">
@@ -47,7 +47,7 @@
             <h2 style="margin-bottom: 16px;">Add Exercise</h2>
             <div class="modal-input-group">
                 <label>Exercise Name</label>
-                <input type="text" id="add-ex-name" placeholder="e.g. Incline Dumbbell Press">
+                <input type="text" id="add-ex-name" list="exercise-name-list" placeholder="e.g. Incline Dumbbell Press">
 
                 <div style="display:flex; gap:8px; margin-top:12px;">
                     <button id="add-ex-mode-standard" class="mode-chip active" onclick="setAddExMode('standard')">Standard</button>
@@ -83,7 +83,7 @@
             <h2 style="margin-bottom: 10px;">Swap Exercise</h2>
             <p>Replace this exercise with a similar variation (keeps the exact same sets, reps, and targets).</p>
             <div class="modal-input-group">
-                <input type="text" id="swap-ex-name" placeholder="e.g. Dumbbell Bench Press">
+                <input type="text" id="swap-ex-name" list="exercise-name-list" placeholder="e.g. Dumbbell Bench Press">
             </div>
             <div class="modal-actions">
                 <button class="modal-btn cancel" onclick="document.getElementById('swap-exercise-modal').style.display='none'">Cancel</button>
@@ -325,6 +325,9 @@
         </div>
     </div>
 
+    <!-- Shared autocomplete source for Swap / Add exercise inputs (populated by app.js) -->
+    <datalist id="exercise-name-list"></datalist>
+
     <nav class="bottom-nav">
         <button class="nav-item" id="nav-library" onclick="switchTab('library-screen')">
             <div class="nav-icon-wrap">
@@ -388,6 +391,8 @@
 
         <div class="streak-container" id="streak-container">
             </div>
+
+        <div id="deload-hint" style="display:none;"></div>
 
         <div class="analytics-card" id="lifetime-stats-card" style="margin-bottom: 10px;">
             <div class="analytics-header">
@@ -509,6 +514,12 @@
                 <button id="chart-exercise-btn" class="custom-select" style="width: auto; max-width: 180px;" onclick="document.getElementById('chart-exercise-modal').style.display='flex'">--</button>
             </div>
             <div id="chart-container" style="position:relative; height: 140px; width: 100%;"></div>
+            <div id="chart-range-row" style="display:flex; gap:6px; justify-content:flex-end; margin-top:18px;">
+                <button class="chart-range-pill active" data-range="recent" onclick="setChartRange('recent')">Recent</button>
+                <button class="chart-range-pill" data-range="90" onclick="setChartRange(90)">3M</button>
+                <button class="chart-range-pill" data-range="180" onclick="setChartRange(180)">6M</button>
+                <button class="chart-range-pill" data-range="all" onclick="setChartRange('all')">All</button>
+            </div>
         </div>
         
         <div id="volume-heatmap-card" class="history-card" style="padding: 16px 16px 14px; margin-bottom: 15px;"></div>
@@ -558,6 +569,7 @@
                 <div class="gdrive-dot" id="gdrive-status-dot"></div>
                 <span id="gdrive-status-text">Not connected</span>
             </div>
+            <div id="gist-last-backup" style="display:none;font-size:11px;color:var(--text-muted);margin:-4px 0 10px;"></div>
             <div class="gdrive-client-row">
                 <input type="password" id="gdrive-client-id-input" placeholder="Paste GitHub Personal Access Token" autocomplete="off" oninput="localStorage.setItem('gistPAT', this.value.trim()); window.updateGistUI()">
             </div>
@@ -747,6 +759,6 @@
         </div>
     </div>
 
-    <script src="scripts/app.js?v=2026.06.12.0105" defer></script>
+    <script src="scripts/app.js?v=2026.07.05.1958" defer></script>
 </body>
 </html>
