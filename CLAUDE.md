@@ -98,7 +98,7 @@ The entire app lives in two files:
 
 **`styles/styles.css`** — Dark-theme CSS using CSS variables (`--accent` orange, `--teal`, `--bg`, `--card`, `--border`, `--text-main`, `--text-muted`, `--danger`).
 
-**`sw.js`** — Service worker for offline/PWA support. Cache name is version-stamped; update the version constant when deploying.
+**`sw.js`** — Service worker for offline/PWA support. Cache name is version-stamped; update the version constant when deploying. Fetch strategy is **stale-while-revalidate** (cache served instantly, refreshed in background) — do not revert to network-first; it hangs on flaky gym connections. `caches.match` falls back to `ignoreSearch: true` so the `?v=`-stamped `database.enc` request hits the install-time cache offline.
 
 ### Storage layers
 | Layer | What's stored |
@@ -218,12 +218,23 @@ PR timeline is toggled by clicking the exercise card (`window.togglePRTimeline`)
 `rebuildPRHistoryFromWorkouts()` — called at the top of `renderStats()`. Scans `workoutHistoryCache` (oldest-first), recomputes e1RM for every logged set using the RTS table, and fills in `prHistory` for any exercise that is missing it. localStorage flag `prHistoryRTS_v2` gates a one-time wipe of old prHistory built with the wrong RTS table.
 
 ### RTS table
-There is **one canonical RTS table** used throughout the app. The correct first row is:
+There is **one canonical RTS table**: the `RTS_TABLE` constant defined near the top of app.js. Every e1RM / load calculation references it (`const rtsChart = RTS_TABLE;`) — **never inline a copy**. The correct first row is:
 `10: [1.000, 0.960, 0.920, 0.890, 0.860, 0.840, 0.810, 0.790, 0.760, 0.740, 0.710, 0.690]`
-Any deviation from this (e.g. `0.950, 0.925` in the RPE-10 row) is the **old wrong table** — do not use it. All six occurrences of the RTS table in app.js must match.
+Any deviation from this (e.g. `0.950, 0.925` in the RPE-10 row) is the **old wrong table** — do not use it.
 
 ### Session journal
 History entries have an optional `note` field (`string`). It is saved from a textarea on the summary screen via `window.saveSessionNote(val)` (debounced 600ms). Displayed as italic text in the history card summary row (`.history-note`). Stored in IndexedDB with the rest of the workout entry.
+
+**Per-set notes:** tapping a set's number during a workout opens a prompt (`window.openSetNote(rowId)`); the note is stored in the session blob as `${rowId}_note`, rendered as an italic line under the set row, carried into the history log by `generateSummary` (`set.note`), and shown in expanded history cards. All user-entered notes are rendered through `escapeHtml()`.
+
+### Backup system (canonical)
+`collectBackup(includePictures)` is the ONE definition of what a backup contains (all localStorage stores incl. `programSwaps_*`/`programModes_*`, full IndexedDB history, optionally progress pictures). `applyBackup(data)` is the one restore path. Both local Export/Import and Gist backup/restore go through them — **never add a field to one path only**. Workout history and progress pictures are merged by `id` on restore (`mergeHistoryById`), never overwritten — a partial snapshot (the Gist keeps only the 200 most recent sessions) must not delete older data. Gist backup success/failure timestamps live in `lastGistBackup`/`lastGistError` and are surfaced in the data sheet.
+
+### Workout-start snapshot
+`activeWorkout.backupState` snapshots `actualBests`, `global1RMs`, `lastUsedWeights` **and `prHistory`** at workout start; cancel/reset restores all four (prHistory guarded for legacy blobs without it).
+
+### Target-set engine
+`checkAndAddTargetRpeSet` resolves the exercise via `getActiveExercises` (NOT raw `db[...]` indexing) — added exercises and Myo/Drop-converted blocks have indices/structures that don't exist in the raw database.
 
 ### Switch Program
 `window.openSwitchProgramModal()` — opens a modal listing all non-custom programs except the current one. Shows whether the target week/day exists in the new program or where it will clamp.
