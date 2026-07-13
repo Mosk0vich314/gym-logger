@@ -284,6 +284,11 @@ The MYO and DROP toggles are **not** in the header — they live below the title
 ### Timer
 Rest timer counts down to 0, beeps, then continues counting up (overtime). The display always shows absolute value — no minus sign — so `00:30` means either "30 seconds left" or "30 seconds overtime" depending on context. The `.finished` class on the banner signals overtime.
 
+**Background alarm (SW-scheduled):** Android freezes a backgrounded PWA, so the in-page timer can't beep until the app is reopened. `startTimer`/`adjustTimer` post `{action:'scheduleTimer', delay}` to the service worker, which holds a `setTimeout` alive via `event.waitUntil` (~5 min max) and shows the "Rest Complete" notification on time even while the page is frozen — unless a visible client exists (then the page's own beep handles it). `closeTimer`/`completeTimer` post `cancelTimer`. **Do not reintroduce the looping silent `<audio>` "Spotify hack"** — it held Android audio focus for the whole rest period, ducking the user's music, and didn't reliably keep the page alive anyway. `navigator.audioSession.type = 'transient'` is set where supported so the ding mixes with music instead of ducking it.
+
+### Screen wake lock
+`requestWakeLock()`/`releaseWakeLock()`/`syncWakeLock()` (top of app.js, near the visibilitychange handler) keep the screen on **only while a workout is active**. `syncWakeLock()` is called from `updateBanners()` and `updateDashboard()` — every start/resume/finish/cancel path funnels through one of those, so no per-site release calls are needed. The OS drops the lock whenever the page is hidden; the `visibilitychange` handler re-acquires it on return if `activeWorkout` is set.
+
 ### Overflow / mobile layout rules
 - All `position: fixed` banners/toasts that size to content must have `max-width: calc(100vw - Xpx)` and `box-sizing: border-box`.
 - Text nodes inside flex items that could be long must have `min-width: 0` on the flex item and `overflow: hidden; text-overflow: ellipsis; white-space: nowrap` on the text element.

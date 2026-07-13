@@ -11,7 +11,7 @@
         }
 
         // --- APP VERSION ---
-        const APP_VERSION = "v2026.07.05.2000";
+        const APP_VERSION = "v2026.07.14.0046";
 
         // --- CANONICAL RTS TABLE ---
         // Single source of truth (see CLAUDE.md "RTS table"). Every e1RM / load
@@ -304,7 +304,35 @@
             });
         }
 
-        // Handle when the user swipes to the home screen and comes back
+        // --- SCREEN WAKE LOCK: keep the screen on while a workout is active ---
+        // The OS auto-releases the lock whenever the page is hidden; the
+        // visibilitychange handler below re-acquires it on return.
+        let wakeLockSentinel = null;
+        let wakeLockPending = false;
+        async function requestWakeLock() {
+            if (!('wakeLock' in navigator) || wakeLockSentinel || wakeLockPending) return;
+            if (document.visibilityState !== 'visible') return;
+            wakeLockPending = true;
+            try {
+                wakeLockSentinel = await navigator.wakeLock.request('screen');
+                wakeLockSentinel.addEventListener('release', () => { wakeLockSentinel = null; });
+            } catch (e) {
+                wakeLockSentinel = null; // e.g. battery saver mode denies it — not fatal
+            }
+            wakeLockPending = false;
+        }
+        function releaseWakeLock() {
+            if (wakeLockSentinel) {
+                wakeLockSentinel.release().catch(() => {});
+                wakeLockSentinel = null;
+            }
+        }
+        // Acquire/release based on whether a workout is in progress.
+        // Called from updateBanners/updateDashboard so every start/finish/cancel path is covered.
+        function syncWakeLock() {
+            if (activeWorkout) requestWakeLock(); else releaseWakeLock();
+        }
+
         // Handle when the user swipes to the home screen and comes back
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
@@ -1039,6 +1067,7 @@
         };
 
         function updateDashboard() {
+            syncWakeLock();
             const heroEmpty = document.getElementById('hero-empty');
             const heroResume = document.getElementById('hero-resume');
             
@@ -1522,10 +1551,11 @@
                     </div>
                     <div class="fb-action">Resume</div>
                 `;
-                banner.style.display = 'flex'; 
+                banner.style.display = 'flex';
             } else {
                 banner.style.display = 'none';
             }
+            syncWakeLock();
         }
 
         function resumeWorkout() {
@@ -5671,28 +5701,42 @@
         };
 
         // 1. Load the Audio Objects
-        let activeAudio = new Audio('./assets/audio/ding.mp3'); 
+        let activeAudio = new Audio('./assets/audio/ding.mp3');
         activeAudio.preload = 'auto';
 
-        // THE SPOTIFY HACK: Silent audio loop to keep the browser awake in the background
-        const silentURI = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-        let silentKeeper = new Audio(silentURI);
-        silentKeeper.loop = true; 
-
-        // NEW: Forcefully strips audio focus from the browser so Spotify/Podcasts go back to full volume
-        function releaseAudioFocus() {
-            if (silentKeeper) {
-                silentKeeper.pause();
-                silentKeeper.src = ''; // Wipes the source completely
-                silentKeeper.load();   // Forces the OS to abandon the audio session
-            }
-        }
+        // Audio Session hint (Safari 16.4+, newer Chrome): the ding is a transient
+        // sound that should mix with — not take over — background music. Without
+        // this the OS may treat the app as a media player and duck Spotify.
+        // (The old approach — a looping silent <audio> to keep the browser awake —
+        // held audio focus for the entire rest period, ducking music the whole time.
+        // Background alerting is now handled by an SW-scheduled notification instead.)
+        try {
+            if ('audioSession' in navigator) navigator.audioSession.type = 'transient';
+        } catch (e) {}
 
         function playBeep() {
             try {
                 activeAudio.currentTime = 0;
                 activeAudio.play().catch(e => console.log("Audio play blocked:", e));
             } catch(e) {}
+        }
+
+        // --- SW-SCHEDULED TIMER ALARM ---
+        // While the PWA is backgrounded Android freezes the page, so the in-page
+        // timer can't beep until the app is reopened. Instead the service worker
+        // schedules the "Rest Complete" notification at timer start; it fires on
+        // time (with the system notification sound + vibration) even if the page
+        // is frozen. The SW skips it if the app is visible when it fires.
+        function postToSW(msg) {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage(msg);
+            }
+        }
+        function scheduleSWAlarm() {
+            postToSW({ action: 'scheduleTimer', delay: timerTargetMs - Date.now() });
+        }
+        function cancelSWAlarm() {
+            postToSW({ action: 'cancelTimer' });
         }
 
         // UPGRADED START TIMER
@@ -5714,7 +5758,7 @@
             const fab = document.querySelector('.global-timer-fab');
             if (fab && seconds > 0) fab.classList.add('timer-active');
 
-            // --- PRIME AUDIO & START SILENT LOOP ---
+            // --- PRIME AUDIO (muted play inside the user gesture unlocks later playback) ---
             try {
                 activeAudio.volume = 0;
                 activeAudio.play().then(() => {
@@ -5722,12 +5766,11 @@
                     activeAudio.volume = 1;
                     activeAudio.currentTime = 0;
                 }).catch(()=>{});
-                
-                // Re-inject the source and keep the app awake in the background!
-                silentKeeper.src = silentURI; 
-                silentKeeper.play().catch(()=>{});
             } catch (e) {}
-            
+
+            // Backstop alarm in case the page is frozen when the timer hits 0
+            scheduleSWAlarm();
+
             timerWorker.postMessage('stop');
             timerWorker.postMessage('start');
             
@@ -5752,15 +5795,16 @@
         }
 
         function adjustTimer(seconds) {
-            timerTargetMs += (seconds * 1000); 
+            timerTargetMs += (seconds * 1000);
             timeLeft = Math.round((timerTargetMs - Date.now()) / 1000);
-            
+
             const banner = document.getElementById('rest-timer-banner');
             if (timeLeft > 0 && banner.classList.contains('finished')) {
                 banner.classList.remove('finished');
                 const actionBtn = document.getElementById('timer-action-btn');
                 if (actionBtn) actionBtn.innerText = "Skip";
             }
+            if (timeLeft > 0) scheduleSWAlarm(); // keep the SW alarm in sync with ±15s
             updateTimerDisplay();
         }
 
@@ -5773,9 +5817,9 @@
             if (fab) fab.classList.remove('timer-active'); // Stop Breathing
             
             if (activeAudio) { activeAudio.pause(); activeAudio.currentTime = 0; }
-            
-            // Instantly restore background music volume
-            releaseAudioFocus(); 
+
+            // Timer dismissed — the SW alarm must not fire later
+            cancelSWAlarm();
 
             // Clear any OS notifications
             if ('serviceWorker' in navigator) {
@@ -5797,8 +5841,8 @@
             const fab = document.querySelector('.global-timer-fab');
             if (fab) fab.classList.remove('timer-active'); // Stop Breathing
 
-            // Instantly restore background music volume once the rest is over
-            releaseAudioFocus();
+            // Page-side completion won the race — stop the SW backstop alarm
+            cancelSWAlarm();
 
             // --- NATIVE PWA BACKGROUND NOTIFICATION ---
             if (document.hidden && "Notification" in window && Notification.permission === "granted") {

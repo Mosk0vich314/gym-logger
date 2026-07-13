@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gomu-trainer-v2026.07.05.2000'; // Increment this!
+const CACHE_NAME = 'gomu-trainer-v2026.07.14.0046'; // Increment this!
 const urlsToCache = [
   './',
   './index.html',
@@ -100,9 +100,53 @@ self.addEventListener('notificationclick', function(event) {
     );
 });
 
-// Add this to listen for the "Update Now" command from app.js
+// 5. MESSAGES: "Update Now" command + rest-timer alarm scheduling.
+// The page schedules the alarm at timer start because Android freezes a
+// backgrounded PWA — the in-page timer can't fire until the app is reopened.
+// event.waitUntil keeps this worker alive (Chrome allows ~5 min) so the
+// notification lands on time even while the page is frozen. If the app is
+// visible when the alarm fires, the page's own beep handles it and we skip.
+let timerTimeout = null;
+let timerDone = null; // resolver for the waitUntil promise
+
+function cancelTimerAlarm() {
+    if (timerTimeout) { clearTimeout(timerTimeout); timerTimeout = null; }
+    if (timerDone) { timerDone(); timerDone = null; }
+}
+
 self.addEventListener('message', (event) => {
-    if (event.data && event.data.action === 'skipWaiting') {
+    if (!event.data) return;
+
+    if (event.data.action === 'skipWaiting') {
         self.skipWaiting();
+    }
+
+    if (event.data.action === 'scheduleTimer') {
+        cancelTimerAlarm(); // ±15s adjustments reschedule; only one alarm at a time
+        const delay = Math.max(0, event.data.delay || 0);
+        event.waitUntil(new Promise((resolve) => {
+            timerDone = resolve;
+            timerTimeout = setTimeout(async () => {
+                timerTimeout = null;
+                timerDone = null;
+                const clientList = await self.clients.matchAll({ type: 'window' });
+                const appVisible = clientList.some(c => c.visibilityState === 'visible');
+                if (!appVisible) {
+                    await self.registration.showNotification("⏱️ Rest Complete!", {
+                        body: "Time for your next set. Tap to resume.",
+                        icon: "./assets/logo-192.png",
+                        vibrate: [200, 100, 200, 100, 400],
+                        tag: "gomu-timer",
+                        renotify: true,
+                        requireInteraction: true
+                    });
+                }
+                resolve();
+            }, delay);
+        }));
+    }
+
+    if (event.data.action === 'cancelTimer') {
+        cancelTimerAlarm();
     }
 });
